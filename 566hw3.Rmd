@@ -1,0 +1,194 @@
+---
+title: "pm566 hw3 - Jiqing Wu"
+output: html_document
+---
+
+```{r setup}
+
+knitr::opts_chunk$set(include  = TRUE)
+ library(httr)
+ library(tidyverse)
+ library(xml2)
+ library(httr)
+ library(stringr)
+ library(readr)
+ library(tidytext)
+ library(dplyr)
+ library(ggplot2)
+
+```
+
+# API 
+
+```{r counter-pubmed, eval=FALSE}
+
+ # Downloading the website
+ website <- xml2::read_html("https://pubmed.ncbi.nlm.nih.gov/?term=sars-cov-2+trial+vaccine")
+
+ # Finding the counts
+ counts <- xml2::xml_find_first(website, "/html/body/main/div[9]/div[2]/div[2]/div[1]/span")
+ 
+ # Turning it into text
+ counts <- as.character(counts)
+ 
+ # Extracting the data using regex
+ stringr::str_extract(counts, "[0-9,]+")
+
+```
+
+```{r}
+
+ query_ids <- GET(
+   url   = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+   query = list(
+                db = "pubmed",
+                term = "sars-cov-2 trial vaccine",
+                retmax =  250
+             )
+ )
+
+ # Get IDs
+ # Extracting the content of the response of GET
+ ids <- httr::content(query_ids)
+ 
+ # Turn the result into a character vector
+ ids <- as.character(ids)
+ #cat(ids)
+
+ # Find all the ids 
+ ids <- stringr::str_extract_all(ids, "<Id>[0-9]+</Id>")[[1]]
+
+ # Remove all the leading and trailing <Id> </Id>. Make use of "|"
+ ids <- stringr::str_remove_all(ids, "</?Id>")
+ 
+```
+
+```{r}
+
+ # Get abstract
+ publications <- GET(
+   url   = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+   query = list(
+     db = "pubmed",
+     id = paste(ids,collapse = ","),
+     retmex = 250,
+     rettype = "abstract"
+     )
+ )
+
+ # Turning the output into character vector
+ publications <- httr::content(publications)
+ publications_txt <- as.character(publications)
+ 
+```
+
+```{r}
+
+ # Form a dataset
+ pub_char_list <- xml2::xml_children(publications)
+ pub_char_list <- sapply(pub_char_list, as.character)
+ 
+ # Titles
+ titles <- str_extract(pub_char_list, "<ArticleTitle>(\\n|.)+</ArticleTitle>")
+ titles <- str_remove_all(titles, "</?[[:alnum:]]+>")
+ titles <- str_replace_all(titles, "\\s+", " ")
+ # Journal names
+ journals <- str_extract(pub_char_list, "<Title>(\\n|.)+</Title>")
+ journals <- str_remove_all(journals, "</?[[:alnum:]]+>")
+ journals <- str_replace_all(journals, "\\s+", " ")
+ # Publication date
+ dates <- str_extract_all(pub_char_list, "<PubDate>(\\n|.)+</PubDate>")
+ dates <- str_remove_all(dates, "</?[[:alnum:]]+>")
+ dates <- str_replace_all(dates, "\\s+", " ")
+ # Abstracts 
+ abstracts <- str_extract(pub_char_list, "<Abstract>(\\n|.)+</Abstract>")
+ abstracts <- str_remove_all(abstracts, "</?[[:alnum:]]+>")
+ abstracts <- str_replace_all(abstracts, "\\s+", " ")
+ table(is.na(abstracts))
+
+ database <- data.frame(
+   PubMedID = ids,
+   Title = titles,
+   Journal = journals,
+   Date = dates,
+   Abstract = abstracts
+ )
+ knitr::kable(database)
+ 
+```
+
+# Text Mining 
+
+```{r}
+
+newData <- read_csv("https://raw.githubusercontent.com/USCbiostats/data-science-data/master/03_pubmed/pubmed.csv")
+
+```
+
+```{r}
+
+# Tokenize the abstracts and count the number of each token
+newData %>%
+   unnest_tokens(output = token,input = abstract) %>%
+   count(token, sort = TRUE)
+
+```
+
+There are 20,567 tokens. The top 5 tokens are the, of, and, in, to. Before we remove the stop words, the top 5 frequenct tokens are all stop words. 
+
+```{r}
+
+# Remove the stop words
+newData %>%
+   unnest_tokens(token,abstract)%>%
+   anti_join(stop_words, by = c("token" = "word"))%>%
+   count(token,sort = TRUE)
+
+```
+
+After removing the stop words, the top 5 tokens are covid, 19, patients, cancer, prostate.
+
+```{r}
+
+# Tokenize the abstracts into bigrams. Visualize 10 most common bigram.
+
+newData %>%
+  unnest_ngrams(output = token, input = abstract, n = 2) %>%
+  anti_join(stop_words, by = c("token" = "word")) %>%
+  count(token, sort = TRUE) %>%
+  top_n(10, n) %>%
+  ggplot(aes(n, fct_reorder(token, n))) +
+  geom_col()
+
+```
+
+```{r}
+
+# Calculate the TF-IDF value 
+
+newData%>% 
+   unnest_tokens(token,abstract) %>% 
+   count(token,term) %>% 
+   bind_tf_idf(token,term,n)%>% 
+   arrange(desc(tf_idf))
+
+```
+
+What are the 5 tokens from each search term with the highest TF-IDF value? How are the results different from the answers you got in question 1?
+
+The 5 tokens from each search term with the highest TF-IDF value are: 
+covid: covid, pandemic, coronavirus, sars, cov
+prostate cancer: prostate, androgen, psa, prostatectomy, castration
+preeclampsia: eclampsia, preeclampsia, pregnancy, maternal, gestational
+meningitis: meningitis, meningeal, pachymeningitis, csf, meninges
+cystic fibrosis: cf, fibrosis, cystic, cftr, sweat
+
+For each term, the terms are more specific. From Q1, we can only know that the text is about covid 19 and prostate cancer, but in Q3, we can get more details.  
+
+
+
+
+
+
+
+
